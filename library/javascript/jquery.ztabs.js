@@ -68,9 +68,6 @@
 	
 	var currentLocationHash = '';
 
-	// zTabs does not currently support multiple tabsets.  might as well declare global $root and $content variables
-	var $root, $content;
-	
 	var methods = {
 		init: function(options) {			
 			// for IE history, add a hidden div to the top of the page
@@ -96,7 +93,7 @@
 				closebutton = '<img src="'+settings.imagebaseurl+settings.closebuttonfile+'" border="0">';
 				refreshbutton = '<img src="'+settings.imagebaseurl+settings.refreshbuttonfile+'" border="0">';
 
-				$content = $('#'+settings.contentdivid)
+				$('#'+settings.contentdivid)
 				.on('click',settings.fromanchor, function(event) {
 					event.preventDefault();	event.stopPropagation();			
 					$(this).zTabs('fromAnchor').click();
@@ -121,7 +118,7 @@
 						alert('Ajax error');
 					});
 				});
-				$root = $(this).addClass('zTabs');
+				var $root = $(this).addClass('zTabs');
 				
 				$('#'+settings.subrowsdivid)
 				.on('click', settings.fromanchor, function(event) {
@@ -161,27 +158,27 @@
 				
 				
 				// If the hash path is set, open the appropriate tabs
-				var w, f;
+				var w, which;
 				if(location.hash != '') {
 					w = $root.zTabs('showPath', location.hash);
-					f = function() { alert('Error: init 1'); }
+					which = '1';
 				} else {
 					if($root.find('li.current, li.currentWithSecondRow, li.currentWithProgression').length == 1) {
 						w = showTab($root.find('li.current, li.currentWithSecondRow, li.currentWithProgression').attr('id'));
-						f = function() { alert('Error: init 2'); }
+						which = '2';
 					} else {
 						w = showTab($root.find('li').attr('id'));
-						f = function() { alert('Error: init 3'); }
+						which = '3';
 					}
 				}
-				$.when(w).then(function() {
+				w.then(function() {
 					var ul = $root.zTabs('current');
 					ul = ul ? ul.parent() : $root;
 					$.when(rebuildList(ul)).then(function() {
 						archiveList(ul);
 						initialized();
 					});
-				}).fail(f);
+				},function() { alert('Error: init '+which); });
 				// STEVE one day there should be a way to differentiate between an app tab set and other tab sets
 				if(typeof hashChecker == 'undefined') {
 					var hashChecker = setInterval ("$(this).zTabs('checkHash');", 100);
@@ -849,7 +846,7 @@
 	function processProperty(li, key, value) {
 		var key = key.toLowerCase();
 		var $li = $(li);
-		$(li).data(key, value);
+		$li.data(key, value);
 		
 		// some changes will require a rewritten tab
 		if(key=='contenturl') {
@@ -1355,14 +1352,15 @@
 	}
 	
 	function tabAncestors(li, zIdArray) {
+		var $li = $(li);
 		// builds array from lowest level to top level
 		var zIdArray = zIdArray || new Array();
-		zIdArray.unshift($(li).attr('id'));
+		zIdArray.unshift($li.attr('id'));
 		
 		// jQuery 1.9 returns object instead of undefined so a second check is added for null data
-		if(typeof $(li).parent().data('ztabid') !== 'undefined' && $(li).parent().data('ztabid') != null) {
-			var liId = $(li).parent().data('ztabid').split("_");
-			$("li[data-ztabid="+liId[0]+"_"+liId[1]+"]").each(function () {
+		if($li.parent().data('ztabid')) {
+			var liId = $li.parent().data('ztabid').split("_");
+			$("li[data-ztabid="+liId[0]+"_"+liId[1]+"]").each(function () { //why each here?
 				return tabAncestors(this, zIdArray);
 			});
 		}
@@ -1371,10 +1369,11 @@
 	
 	
 	function tabDecendants(li, zIdArray) {
+		var $li = $(li), zId = $li.data('ztabid');
 		// builds array from current level to the lowest level
 		var zIdArray = zIdArray || new Array();
-		zIdArray.push($(li).data('ztabid'));
-		$("ul[data-ztabid="+$(li).data('ztabid')+"_content]").find('.current, .currentWithSecondRow, .currentWithProgression').each(function() {
+		zIdArray.push(zId);
+		$("ul[data-ztabid="+zId+"_content]").find('.current, .currentWithSecondRow, .currentWithProgression').each(function() {
 			return tabDecendants(this, zIdArray);
 		});
 		return zIdArray;
@@ -1418,10 +1417,9 @@
 	}
 	
 	function hideSubTabs(li) {
-		$("ul[data-ztabid="+$(li).data('ztabid')+"_content]").find('.currentWithSecondRow, .currentWithProgression').each(function () {
+		$("ul[data-ztabid="+$(li).data('ztabid')+"_content]").removeClass('currentSubTabs').addClass('hiddenTabContent').find('.currentWithSecondRow, .currentWithProgression').each(function () {
 			hideSubTabs(this);
 		});
-		$("ul[data-ztabid="+$(li).data('ztabid')+"_content]").removeClass('currentSubTabs').addClass('hiddenTabContent');
 	}
 	
 	function loadingTab(nextTabId) {
@@ -1544,56 +1542,39 @@
 	// Reconstitute a list based on what's in local storage
 	// ul can be a DOM element of an id
 	function rebuildList(ul) {
-		var ul = ul || false;
-		var dfd = $.Deferred();		
+		var ul = ul || false,
+			$ul,
+			dfd = $.Deferred();		
 		
 		if(!ul || typeof localStorage == 'undefined' || settings.localstorage == 'ignore' || settings.localstorage == false) {
-			dfd.resolve();
-			return dfd.promise();
-		} else if(typeof ul == 'string') {
-			ul = $('#'+ul).get(0);
+			return dfd.resolve().promise();
+		} else {
+			$ul = typeof (ul) == 'string' ? $('#'+ul).get(0) : $(ul);
 		}
-
+		var ulId = $ul.attr('id'),
+			d = function(){
+				tabOverflow($ul);
+				dfd.resolve();
+			},
+			then = d;
+		
 		var tabsToAdd = [];
-		if(localStorage.getItem($(ul).attr('id')) != null) {		
-			var tabIds = JSON.parse(localStorage.getItem($(ul).attr('id')));
-			for(i in tabIds) {	
-				if(tabIds.hasOwnProperty(i)) {
-					if(!$(cleanId(tabIds[i].id)).is('li')) {
-						// the tab doesn't exist.  It should be added back in
-						if(tabIds[i].theclass == 'current' || tabIds[i].theclass == 'currentWithSecondRow' || tabIds[i].theclass == 'currentWithProgression' || tabIds[i].theclass == 'hiddenTab current' || tabIds[i].theclass == 'hiddenTab currentWithSecondRow' || tabIds[i].theclass == 'hiddenTab currentWithProgression') {
-							tabIds[i].data.show = true;
-						} else {
-							tabIds[i].data.show = false;
-						}
-						tabIds[i].data.tabid = tabIds[i].id;
-						tabIds[i].data.position = i;
-						tabsToAdd.push({ul:ul, data: tabIds[i].data});
-					} else {
-						// the tab does exist, should it be current?
-					
-						if(tabIds[i].theclass == 'current' || tabIds[i].theclass == 'currentWithSecondRow'  || tabIds[i].theclass == 'currentWithProgression' || tabIds[i].theclass == 'hiddenTab current' || tabIds[i].theclass == 'hiddenTab currentWithSecondRow' || tabIds[i].theclass == 'hiddenTab currentWithProgression') {
-							var showLater = cleanId(tabIds[i].id);
-						}
-					}
-				}
+		if( localStorage.getItem(ulId) ) {		
+			var tabIds = JSON.parse( localStorage.getItem(ulId) );
+			for (var i=0; i<tabIds.length; i++) {
+				var cur = tabIds[i].theclass == 'current' || tabIds[i].theclass == 'currentWithSecondRow' || tabIds[i].theclass == 'currentWithProgression' || tabIds[i].theclass == 'hiddenTab current' || tabIds[i].theclass == 'hiddenTab currentWithSecondRow' || tabIds[i].theclass == 'hiddenTab currentWithProgression';
+				var $found = $(cleanId(tabIds[i].id));
+				if(!$found.is('li')) {
+					tabsToAdd.push({ ul:ul, data: $.extend(tabIds[i].data,{ show:cur, tabid:tabIds[i].id, position:i }) });
+				} else if(cur) {
+					var $dupe = $found;
+					then = function() { $dupe.zTabs('show').then(d,dfd.reject); }
+				}		
 			}
 		}
 		
 		// We only want to resolve when all the tabs are setup
-		$.when(addTabArray(tabsToAdd)).then(function() {
-			if(typeof showLater != 'undefined') {
-				$.when($(showLater).zTabs('show')).then(function() {
-					tabOverflow($(ul));
-					dfd.resolve();
-				}).fail(function() {
-					dfd.reject();
-				});
-			} else {
-				tabOverflow($(ul));
-				dfd.resolve();
-			}
-		});
+		addTabArray(tabsToAdd).then(then, dfd.reject);
 		return dfd.promise();
 	}
 	
@@ -1607,11 +1588,7 @@
 		} else {
 			var tab = tabsToAdd.shift();
 			
-			$.when($(tab.ul).zTabs('add', tab.data), addTabArray(tabsToAdd)).then(function() {
-				dfd.resolve();
-			}).fail(function() {
-				dfd.reject();
-			});
+			$.when($(tab.ul).zTabs('add', tab.data), addTabArray(tabsToAdd)).then(dfd.resolve,dfd.reject);
 		}
 		return dfd.promise();
 	}
@@ -1783,11 +1760,6 @@
 	// STEVE isn't there a better way to do this.  Recursion to the rescue?
 	// CARL: what? no. why is this even happening?
 	function whichRow(ul) {
-		// return the row number that this ul has
-		for(var i=0; i<256; i++) {
-			if($(ul).hasClass('row'+i)) {
-				return Number(i);
-			}
-		}
+		return Number($(ul).attr('class').match(/row(\d+)\s?$/)[1]);
 	}
 })( jQuery );
