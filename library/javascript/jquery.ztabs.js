@@ -108,13 +108,13 @@
 				.on('submit', settings.formreplace, function(event) {
 					event.preventDefault(); event.stopPropagation();
 					var $that = $(this);
-					$.ajax($that.attr('action'),{ type:$that.attr('method') || 'POST', data:$that.serialize() }).done(function(data) {
+					$.ajax($that.attr('action'),{ type:$that.attr('method') || 'POST', data:$that.serialize() }).then(function(data) {
 						if($that.zTabs('parentContent', settings.formresults).length > 0) {
 							$that.zTabs('parentContent', settings.formresults).html(data);
 						} else {
 							$that.zTabs('parentContent').html(data);
 						}
-					}).fail(function() {
+					},function() {
 						alert('Ajax error');
 					});
 				});
@@ -158,23 +158,23 @@
 				
 				
 				// If the hash path is set, open the appropriate tabs
-				var w, which;
+				var whenComplete, which;
 				if(location.hash != '') {
-					w = $root.zTabs('showPath', location.hash);
+					whenComplete = $root.zTabs('showPath', location.hash);
 					which = '1';
 				} else {
 					if($root.find('li.current, li.currentWithSecondRow, li.currentWithProgression').length == 1) {
-						w = showTab($root.find('li.current, li.currentWithSecondRow, li.currentWithProgression').attr('id'));
+						whenComplete = showTab($root.find('li.current, li.currentWithSecondRow, li.currentWithProgression').attr('id'));
 						which = '2';
 					} else {
-						w = showTab($root.find('li').attr('id'));
+						whenComplete = showTab($root.find('li').attr('id'));
 						which = '3';
 					}
 				}
-				w.then(function() {
+				whenComplete.then(function() {
 					var ul = $root.zTabs('current');
 					ul = ul ? ul.parent() : $root;
-					$.when(rebuildList(ul)).then(function() {
+					rebuildList(ul).then(function() {
 						archiveList(ul);
 						initialized();
 					});
@@ -204,10 +204,7 @@
 			} else if(options.label) {
 				var liId = uniqueId(options.label);
 			} else {
-				// error
-				alert('Error: Adding a tab requires an id or label');
-				dfd.fail('Adding a tab requires an id or label');
-				return dfd.promise();
+				return dfd.reject('Adding a tab requires an id or label').promise();
 			}
 			
 			// Set up the label.  Truncate if appropriate			
@@ -238,27 +235,23 @@
 			
 			if($this.is('li')) {
 				// show the tab
-				if($("div[data-ztabid="+$this.data('ztabid')+"_content], ul[data-ztabid="+$this.data('ztabid')+"_content]").length > 0) {
+				var ztid = $this.data('ztabid'),
+					sel = "div[data-ztabid="+ztid+"_content], ul[data-ztabid="+ztid+"_content]",
+					$subtabs = $(sel);
+				if($subtabs.length) {
 					delete options.parentid; // we've already handed moving to the parent
-					return $("div[data-ztabid="+$this.data('ztabid')+"_content], ul[data-ztabid="+$this.data('ztabid')+"_content]").zTabs('add', options);
+					return $subtabs.zTabs('add', options);
 				} else {					
-					$.when($this.zTabs('show')).then(function() {
-						// After showing this tab, see if it has subtabs, if so, add the new tab
-						if($("div[data-ztabid="+$this.data('ztabid')+"_content], ul[data-ztabid="+$this.data('ztabid')+"_content]").length > 0) {
+					$this.zTabs('show').then(function() {
+						// showing tab may cause subtabs to load, so $subtabs may have length now
+						$subtabs = $(sel);
+						if($subtabs.length) {
 							delete options.parentid; // we've already handed moving to the parent
-							$.when($("div[data-ztabid="+$this.data('ztabid')+"_content], ul[data-ztabid="+$this.data('ztabid')+"_content]").zTabs('add', options)).then(function() {
-								dfd.resolve();
-							}).fail(function() {
-								// the add failed
-								dfd.reject();
-							});
+							$subtabs.zTabs('add', options).then(dfd.resolve,dfd.reject);
 						} else {
 							dfd.resolve();
 						}
-					}).fail(function() {
-						// the show failed
-						dfd.reject();
-					});
+					}, dfd.reject);
 				}
 				return dfd.promise();
 			}
@@ -283,9 +276,8 @@
 					}
 				}
 				// Set the position of the tab to be added
-				if(typeof options.position != 'undefined' && options.position < $this.find('li').length) {
-					var position = 'li:eq('+options.position+')';
-					$this.find(position).before($newLi);
+				if(options.position && options.position < $this.find('li').length) {
+					$this.find('li').eq(options.position).before($newLi);
 				} else {
 					$this.append($newLi);
 				}
@@ -294,12 +286,10 @@
 				if (!$newLi.is('.zIgnore')) { 
 					setUpTab($newLi);
 					if(options.show) { // show the tab
-						$.when($newLi.zTabs('show')).then(function() {
+						$newLi.zTabs('show').then(function() {
 							tabOverflow($this,  $newLi);
 							dfd.resolve();
-						}).fail(function() {
-							dfd.reject();
-						});
+						},dfd.reject);
 					} else {
 						archiveList($this.get(0));
 						tabOverflow($this,  $newLi);
@@ -371,22 +361,20 @@
 			}
 		},
 		close: function(force) {
-			var force = force || false;
-			var that = this;		
+			var force = force || false;		
 			var dfd = $.Deferred(); // returns a promise
 			
-			if (!(checkOnCloses(that) || force)) return dfd.reject().promise();
+			if (!(checkOnCloses(this) || force)) return dfd.reject().promise();
 			
-			var $that = $(that);
-			var ul = $that.parent().get(0);
+			var $that = $(this);
+			var $ul = $that.parent(), ul = $ul.get(0);
 			
 			// call some onclose bit that is allowed to cancel
-			var commonThen = function() {
+			var done = function() {
 				archiveList(ul);
-				tabOverflow($(ul));
+				tabOverflow($ul);
 				dfd.resolve();
 			};
-			var commonFail = dfd.reject;
 			
 			var showIt;
 			if($that.is('.current, .currentWithSecondRow, .currentWithProgression')) {
@@ -394,20 +382,20 @@
 				if($that.is('.currentWithSecondRow, .currentWithProgression')) {
 					dfd.then(rowChange);
 				}
-				var $show = $("[data-ztabid="+recentTabId+"]"),
-					w = $show.is('li') ? $show : $(ul).find('li').first();
+				var $show = $("[data-ztabid="+recentTabId+"]");
+				$show = $show.is('li') ? $show : $ul.find('li').first();
 				showIt = function() { 
-						$that.remove();
-						$.when(w.zTabs('show')).then(commonThen).fail(commonFail)
-					}
+					$that.remove();
+					$show.zTabs('show').then(done,dfd.reject)
+				}
 				
 			} else {
 				showIt = function() {
 					$that.remove();
-					commonThen();
+					done();
 				}
 			}
-			removeContentForTab(that);
+			removeContentForTab(this);
 			if($that.hasClass('hiddenTab')) { // If it's hidden, don't animate the closing
 				showIt();
 			} else {
@@ -612,19 +600,20 @@
 					// blow it away and show this tab
 					removeContentForTab($li);
 					if(jQuery.inArray($li.attr('id'), tabAncestors($li.zTabs('current'))) != -1) {
-						$.when($li.zTabs('show',true)).then(progress);
+						$li.zTabs('show',true).then(progress,dfd.reject);
 					} else {
 						progress();
 					}
 				} else {
 					// if contenturl doesn't start with #, ajax for the content
-					if($(this).data('contenturl').substr(0,1) != '#') {
+					if($li.data('contenturl').substr(0,1) != '#') {
 						// check to see that content exists.  if not, don't refresh something that's never been loaded
-						if($("div[data-ztabid="+$li.data('ztabid')+"_content], ul[data-ztabid="+$li.data('ztabid')+"_content]").length > 0) {
-							$.get($(this).data('contenturl')).success(function(data) {
-								$("div[data-ztabid="+$li.data('ztabid')+"_content], ul[data-ztabid="+$li.data('ztabid')+"_content]").html(data);
+						var $tar = $("div[data-ztabid="+$li.data('ztabid')+"_content], ul[data-ztabid="+$li.data('ztabid')+"_content]");
+						if($tar.length > 0) {
+							$.get($li.data('contenturl')).then(function(data) {
+								$tar.html(data);
 								progress();
-							}).fail(dfd.reject);
+							},dfd.reject);
 						} else {
 							dfd.reject();
 						}
@@ -644,16 +633,17 @@
 					dfd.resolve();
 				} else {
 					var $that = $(this);
-					$.when(showTab(diff)).then(function() {
+					showTab(diff).then(function() {
 						archiveList($that.parent());
-					}).fail(function() {
+						dfd.resolve();
+					}, function() {
 						var goBackToThisTab = $getTabSet().zTabs('current');
 						// Set the currentTab to the one we tried to go to, just so we can jump back
 						// Otherwise zTabs thinks we already on the tab we are trying to do to
 						$getTabSet().data('currentTab', $that.get(0));
 						
-						$.when($(goBackToThisTab).zTabs('show')).always(dfd.reject);
-					}).done(dfd.resolve);
+						$(goBackToThisTab).zTabs('show').always(dfd.reject);
+					});
 				}
 			} else {
 				dfd.reject();
@@ -672,7 +662,7 @@
 				if(tabPath[0] == '#' || tabPath[0] == '') {
 					tabPath.shift(); // remove the #
 				}
-				$.when(showTab(tabPath)).fail(dfd.reject).done(dfd.resolve);
+				showTab(tabPath).then(dfd.resolve,dfd.reject);
 			} else {
 				dfd.reject();
 			}
@@ -920,11 +910,10 @@
 			// perhaps a path got passed in that isn't currently valid, we might need to get the tab from local storage, etc.
 			var $ul = $getTabSet();
 			$ul = $ul.zTabs('current') ? $('.currentSubTabs:last') : $ul;
-			$.when(rebuildList($ul)).then(function() {
+			rebuildList($ul).then(function() {
 				if($ul.find('li.current, li.currentWithSecondRow, li.currentWithProgression').length != 1) {
 					// give up.  show the first tab
-					var thisId = $ul.find('li:first').attr('id');
-					$.when($ul.find('li:first').zTabs('show')).fail(dfd.reject).done(dfd.resolve);
+					$ul.find('li').first().zTabs('show').then(dfd.resolve,dfd.reject);
 				} else {
 					dfd.resolve();
 				}
@@ -937,18 +926,15 @@
 			// the tab was already set, make sure it's content is showing
 			$getTabSet(nextTabId).data('currentTab', $nextTabId.get(0));
 			$tar.removeClass('hiddenTabContent').addClass($tar.is('ul') ? 'currentSubTabs' : 'currentTabContent');
-			var w;
+			var whenComplete;
 			// If there's another tab in the array, deal with it
 			if(tabArray.length > 0) {
-				w = showTab(tabArray);
-			} else if (($nextTabId.hasClass('currentWithSecondRow') || $nextTabId.hasClass('currentWithProgression')) && $tar.find('li.current').length < 1) {
-				// The current tab has child tabs but none of them are current.  This is probably because the current one was just closed
-				w = showTab($tar.find('li').attr('id'));
-			} else if (($nextTabId.hasClass('currentWithSecondRow') || $nextTabId.hasClass('currentWithProgression')) && $tar.find('li.current').length == 1) {
-				w = showTab($tar.find('li.current').attr('id'));
+				whenComplete = showTab(tabArray);
+			} else if ($nextTabId.is('.currentWithSecondRow, .currentWithProgression')) {
+				whenComplete = showTab($tar.find('li.current').attr('id') || $tar.find('li').attr('id'));
 			} 
-			if (w) {
-				$.when(w).fail(dfd.reject).done(dfd.resolve);
+			if (whenComplete) {
+				whenComplete.then(dfd.resolve,dfd.reject);
 			} else {
 				clickLock = false;
 				updateURL(nextTabId);
@@ -1005,27 +991,23 @@
 					onWake(nextTabId);
 					
 					// find the next tab, the one already set to current, or set the first one in the list
-					var w, d = dfd.resolve;
+					var whenComplete, d = dfd.resolve;
 					if(tabArray.length > 0) {
-						w = showTab(tabArray);
+						whenComplete = showTab(tabArray);
 					} else if($tar.find('li.current, li.currentWithSecondRow, li.currentWithProgression').length == 1) {
-						w = showTab($tar.find('li.current, li.currentWithSecondRow, li.currentWithProgression').attr('id'));
+						whenComplete = showTab($tar.find('li.current, li.currentWithSecondRow, li.currentWithProgression').attr('id'));
 					} else {
-						w = rebuildList($tar.get(0));
+						whenComplete = rebuildList($tar.get(0));
 						d = function() {
 							if($tar.find('li.current, li.currentWithSecondRow, li.currentWithProgression').length >= 1) {
 								dfd.resolve();
 							} else {
 								// give up.  show the first tab
-								$.when(showTab($tar.find('li').attr('id'))).then(function() {
-									dfd.resolve();
-								}).fail(function() {
-									dfd.reject();
-								});
+								showTab($tar.find('li').attr('id')).then(dfd.resolve,dfd.reject);
 							}
 						};
 					}
-					$.when(w).fail(dfd.reject).done(d);
+					whenComplete.then(d,dfd.reject);
 				} else {					
 					// label the content div
 					if(!$tar.attr('data-ztabid')) {
@@ -1083,28 +1065,24 @@
 								});
 							}
 						});
-						var w, d = dfd.resolve;
+						var whenComplete, d = dfd.resolve;
 						if(tabArray.length > 0) {
-							w = showTab(tabArray);
+							whenComplete = showTab(tabArray);
 						} else if($tar.find('li.current, li.currentWithSecondRow, li.currentWithProgression').length == 1) {
-							w = showTab($tar.find('li.current, li.currentWithSecondRow, li.currentWithProgression').attr('id'));
+							whenComplete = showTab($tar.find('li.current, li.currentWithSecondRow, li.currentWithProgression').attr('id'));
 						} else {
 							// rebuild and try again
-							w = rebuildList($tar.get(0));
+							whenComplete = rebuildList($tar.get(0));
 							d = function() {
 								if($tar.find('li.current, li.currentWithSecondRow, li.currentWithProgression').length == 1) {
 									dfd.resolve();
 								} else {
 									// give up.  show the first tab
-									$.when(showTab($tar.find('li').attr('id'))).then(function() {
-										dfd.resolve();
-									}).fail(function() {
-										dfd.reject();
-									});
+									showTab($tar.find('li').attr('id')).then(dfd.resolve,dfd.reject);
 								}
 							}
 						}
-						$.when(w).done(d).fail(dfd.reject);
+						whenComplete.then(d,dfd.reject);
 					} else {
 						// just content
 						$nextTabId.addClass('current');
@@ -1129,7 +1107,7 @@
 						}
 					}
 					
-					$.when(fetchData(contenturl)).then(function(data) {						
+					fetchData(contenturl).then(function(data) {						
 						var regEx = /^\s*(<ul[\s\S]*?<\/ul>)([\s\S]*)/;  // look for this pattern: <optional white-space> <ul> <content>
 						var matchArray = data.match(regEx);
 						if(matchArray) {
@@ -1244,37 +1222,24 @@
 							onWake(nextTabId);
 
 							// find the next tab, the on already set to current, or set the first one in the list
+							var whenComplete, d = dfd.resolve;
 							if(tabArray.length > 0) {
-								$.when(showTab(tabArray)).then(function() {
-									dfd.resolve();
-								}).fail(function() {
-									dfd.reject();
-								});
+								whenComplete = showTab(tabArray);
+								
 							} else if($newUL.find('li.current, li.currentWithSecondRow, li.currentWithProgression').length == 1) {
-								$.when(showTab($newUL.find('li.current, li.currentWithSecondRow, li.currentWithProgression').attr('id'))).then(function() {
-									dfd.resolve();
-								}).fail(function() {
-									dfd.reject();
-								});
+								whenComplete = showTab($newUL.find('li.current, li.currentWithSecondRow, li.currentWithProgression').attr('id'));
 							} else {
-
 								// rebuild and try again
-								$.when(rebuildList($newUL.get(0))).then(function() {
+								whenComplete = rebuildList($newUL.get(0))
+								d = function() {
 									if($newUL.find('li.current, li.currentWithSecondRow, li.currentWithProgression').length == 1) {
 										dfd.resolve();
 									} else {
-										// give up.  show the first tab
-										$.when(showTab($newUL.find('li:first').attr('id'))).then(function() {
-											dfd.resolve();
-										}).fail(function() {
-											dfd.reject();
-										});
+										showTab($newUL.find('li:first').attr('id')).then(dfd.resolve,dfd.reject);
 									}
-								}).fail(function() {
-									dfd.reject();
-								});
-								// return dfd.promise();
-							}					
+								};
+							}
+							whenComplete.then(d,dfd.reject);
 						}
 						else {
 							// NOT A LIST, MUST BE CONTENT FOR A SINGLE TAB
@@ -1307,9 +1272,7 @@
 							onWake(nextTabId);
 							dfd.resolve();
 						}
-					}).fail(function() {
-						dfd.reject();
-					});
+					},dfd.reject);
 				}
 			}
 		}
@@ -1321,16 +1284,12 @@
 		// Is it trying to use JSONP?  
 		if(contenturl.indexOf('?') != -1 && contenturl.indexOf('?') != contenturl.lastIndexOf('?')) {
 			// there is more than one ? in this URL
-			$.when($.getJSON(contenturl)).then(function(data) {
-				dfd.resolve(data.html);
-			}).fail(function() {
-				dfd.fail();
-			});
+			$.getJSON(contenturl).then(function(data) {
+				dfd.resolve(data.html); // CARL i don't understand.  getJSON...data.html? something to do with JSONP?
+			}, dfd.reject);
 		} else {
 			// go get it via ajax
-			$.when($.get(contenturl)).then(function(data) {
-				dfd.resolve(data);
-			}).fail(function(jqXHR, textStatus, errorThrown) {
+			$.get(contenturl).then(dfd.resolve, function(jqXHR, textStatus, errorThrown) {
 				alert(textStatus+": "+errorThrown);			
 				dfd.reject();
 			});
@@ -1674,7 +1633,7 @@
 					click:function(e){ e.stopPropagation(); },
 					change:function() {
 						var $that = $(this), tabId = '#'+$that.val();
-						$.when($(tabId).zTabs('show')).then(function() {
+						$(tabId).zTabs('show').then(function() {
 							syncOverflow($that.parent().parent());
 						});
 					}
